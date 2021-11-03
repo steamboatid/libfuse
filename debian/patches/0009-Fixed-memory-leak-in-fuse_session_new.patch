@@ -1,0 +1,23 @@
+From 50fe9f7c818628dc5dd69218c851a48fa1f07987 Mon Sep 17 00:00:00 2001
+From: Bill Zissimopoulos <billziss@navimatics.com>
+Date: Thu, 2 Jan 2020 03:08:03 -0800
+Subject: [PATCH] Fixed memory leak in fuse_session_new()
+
+---
+ lib/fuse_lowlevel.c | 3 ++-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/lib/fuse_lowlevel.c b/lib/fuse_lowlevel.c
+index 36713854..d8112f58 100644
+--- a/lib/fuse_lowlevel.c
++++ b/lib/fuse_lowlevel.c
+@@ -2893,7 +2893,8 @@ struct fuse_session *fuse_session_new(struct fuse_args *args,
+ out4:
+ 	fuse_opt_free_args(args);
+ out3:
+-	free(mo);
++	if (mo != NULL)
++		destroy_mount_opts(mo);
+ out2:
+ 	free(se);
+ out1:
