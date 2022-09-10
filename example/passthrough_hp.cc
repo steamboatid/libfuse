@@ -43,7 +43,7 @@
  * \include passthrough_hp.cc
  */
 
-#define FUSE_USE_VERSION 35
+#define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 12)
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -194,13 +194,19 @@ static void sfs_init(void *userdata, fuse_conn_info *conn) {
     if (conn->capable & FUSE_CAP_FLOCK_LOCKS)
         conn->want |= FUSE_CAP_FLOCK_LOCKS;
 
-    // Use splicing if supported. Since we are using writeback caching
-    // and readahead, individual requests should have a decent size so
-    // that splicing between fd's is well worth it.
-    if (conn->capable & FUSE_CAP_SPLICE_WRITE && !fs.nosplice)
-        conn->want |= FUSE_CAP_SPLICE_WRITE;
-    if (conn->capable & FUSE_CAP_SPLICE_READ && !fs.nosplice)
-        conn->want |= FUSE_CAP_SPLICE_READ;
+    if (fs.nosplice) {
+        // FUSE_CAP_SPLICE_READ is enabled in libfuse3 by default,
+        // see do_init() in in fuse_lowlevel.c
+        // Just unset both, in case FUSE_CAP_SPLICE_WRITE would also get enabled
+        // by detault.
+        conn->want &= ~FUSE_CAP_SPLICE_READ;
+        conn->want &= ~FUSE_CAP_SPLICE_WRITE;
+    } else {
+        if (conn->capable & FUSE_CAP_SPLICE_WRITE)
+            conn->want |= FUSE_CAP_SPLICE_WRITE;
+        if (conn->capable & FUSE_CAP_SPLICE_READ)
+            conn->want |= FUSE_CAP_SPLICE_READ;
+    }
 }
 
 
@@ -357,7 +363,14 @@ static int do_lookup(fuse_ino_t parent, const char *name,
             cerr << "DEBUG: lookup(): inode " << e->attr.st_ino
                  << " (userspace) already known; fd = " << inode.fd << endl;
         lock_guard<mutex> g {inode.m};
+
         inode.nlookup++;
+        if (fs.debug)
+            cerr << "DEBUG:" << __func__ << ":" << __LINE__ << " "
+                 <<  "inode " << inode.src_ino
+                 << " count " << inode.nlookup << endl;
+
+
         close(newfd);
     } else { // no existing inode
         /* This is just here to make Helgrind happy. It violates the
@@ -367,7 +380,13 @@ static int do_lookup(fuse_ino_t parent, const char *name,
         lock_guard<mutex> g {inode.m};
         inode.src_ino = e->attr.st_ino;
         inode.src_dev = e->attr.st_dev;
+
         inode.nlookup++;
+        if (fs.debug)
+            cerr << "DEBUG:" << __func__ << ":" << __LINE__ << " "
+                 <<  "inode " << inode.src_ino
+                 << " count " << inode.nlookup << endl;
+
         inode.fd = newfd;
         fs_lock.unlock();
 
@@ -474,6 +493,10 @@ static void sfs_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t parent,
     {
         lock_guard<mutex> g {inode.m};
         inode.nlookup++;
+        if (fs.debug)
+            cerr << "DEBUG:" << __func__ << ":" << __LINE__ << " "
+                 <<  "inode " << inode.src_ino
+                 << " count " << inode.nlookup << endl;
     }
 
     fuse_reply_entry(req, &e);
@@ -529,6 +552,9 @@ static void sfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
 			    inode.generation++;
 		    }
 	    }
+
+        // decrease the ref which lookup above had increased
+        forget_one(e.ino, 1);
     }
     auto res = unlinkat(inode_p.fd, name, 0);
     fuse_reply_err(req, res == -1 ? errno : 0);
@@ -545,6 +571,12 @@ static void forget_one(fuse_ino_t ino, uint64_t n) {
         abort();
     }
     inode.nlookup -= n;
+
+    if (fs.debug)
+        cerr << "DEBUG:" << __func__ << ":" << __LINE__ << " "
+             <<  "inode " << inode.src_ino
+             << " count " << inode.nlookup << endl;
+
     if (!inode.nlookup) {
         if (fs.debug)
             cerr << "DEBUG: forget: cleaning up inode " << inode.src_ino << endl;
@@ -856,6 +888,7 @@ static void sfs_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info *fi) {
     lock_guard<mutex> g {inode.m};
     inode.nopen++;
     fi->keep_cache = (fs.timeout != 0);
+    fi->noflush = (fs.timeout == 0 && (fi->flags & O_ACCMODE) == O_RDONLY);
     fi->fh = fd;
     fuse_reply_open(req, fi);
 }
@@ -1195,6 +1228,8 @@ static void maximize_fd_limit() {
 
 int main(int argc, char *argv[]) {
 
+    struct fuse_loop_config *loop_config = NULL;
+
     // Parse command line options
     auto options {parse_options(argc, argv)};
 
@@ -1241,15 +1276,15 @@ int main(int argc, char *argv[]) {
     umask(0);
 
     // Mount and run main loop
-    struct fuse_loop_config loop_config;
-    loop_config.clone_fd = 0;
-    loop_config.max_idle_threads = 10;
+    loop_config = fuse_loop_cfg_create();
+
     if (fuse_session_mount(se, argv[2]) != 0)
         goto err_out3;
     if (options.count("single"))
         ret = fuse_session_loop(se);
     else
-        ret = fuse_session_loop_mt(se, &loop_config);
+        ret = fuse_session_loop_mt(se, loop_config);
+
 
     fuse_session_unmount(se);
 
@@ -1258,6 +1293,8 @@ err_out3:
 err_out2:
     fuse_session_destroy(se);
 err_out1:
+
+    fuse_loop_cfg_destroy(loop_config);
     fuse_opt_free_args(&args);
 
     return ret ? 1 : 0;

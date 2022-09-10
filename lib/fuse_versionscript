@@ -168,6 +168,24 @@ FUSE_3.7 {
 		fuse_log;
 } FUSE_3.4;
 
+FUSE_3.12 {
+	global:
+		fuse_session_loop_mt;
+		fuse_session_loop_mt_312;
+		fuse_loop_mt;
+		fuse_loop_mt_32;
+		fuse_loop_mt_312;
+		fuse_loop_cfg_create;
+		fuse_loop_cfg_destroy;
+		fuse_loop_cfg_set_idle_threads;
+		fuse_loop_cfg_set_max_threads;
+		fuse_loop_cfg_set_clone_fd;
+		fuse_loop_cfg_convert;
+		fuse_parse_cmdline;
+		fuse_parse_cmdline_30;
+		fuse_parse_cmdline_312;
+} FUSE_3.4;
+
 # Local Variables:
 # indent-tabs-mode: t
 # End:

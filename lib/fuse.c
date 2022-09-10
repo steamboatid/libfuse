@@ -59,7 +59,6 @@
 
 struct fuse_fs {
 	struct fuse_operations op;
-	struct fuse_module *m;
 	void *user_data;
 	int debug;
 };
@@ -2668,8 +2667,6 @@ void fuse_fs_destroy(struct fuse_fs *fs)
 	fuse_get_context()->private_data = fs->user_data;
 	if (fs->op.destroy)
 		fs->op.destroy(fs->user_data);
-	if (fs->m)
-		fuse_put_module(fs->m);
 	free(fs);
 }
 
@@ -3272,6 +3269,10 @@ static void fuse_lib_open(fuse_req_t req, fuse_ino_t ino,
 
 			if (f->conf.auto_cache)
 				open_auto_cache(f, ino, path, fi);
+
+			if (f->conf.no_rofd_flush &&
+			    (fi->flags & O_ACCMODE) == O_RDONLY)
+				fi->noflush = 1;
 		}
 		fuse_finish_interrupt(f, req, &d);
 	}
@@ -4289,6 +4290,8 @@ static void fuse_lib_ioctl(fuse_req_t req, fuse_ino_t ino, unsigned int cmd,
 	fuse_finish_interrupt(f, req, &d);
 	free_path(f, ino, path);
 
+	if (err < 0)
+		goto err;
 	fuse_reply_ioctl(req, err, out_buf, out_bufsz);
 	goto out;
 err:
@@ -4574,8 +4577,8 @@ int fuse_loop(struct fuse *f)
 	return fuse_session_loop(f->se);
 }
 
-FUSE_SYMVER("fuse_loop_mt_32", "fuse_loop_mt@@FUSE_3.2")
-int fuse_loop_mt_32(struct fuse *f, struct fuse_loop_config *config)
+FUSE_SYMVER("fuse_loop_mt_312", "fuse_loop_mt@@FUSE_3.12")
+int fuse_loop_mt_312(struct fuse *f, struct fuse_loop_config *config)
 {
 	if (f == NULL)
 		return -1;
@@ -4584,8 +4587,25 @@ int fuse_loop_mt_32(struct fuse *f, struct fuse_loop_config *config)
 	if (res)
 		return -1;
 
-	res = fuse_session_loop_mt_32(fuse_get_session(f), config);
+	res = fuse_session_loop_mt_312(fuse_get_session(f), config);
 	fuse_stop_cleanup_thread(f);
+	return res;
+}
+
+int fuse_loop_mt_32(struct fuse *f, struct fuse_loop_config_v1 *config_v1);
+FUSE_SYMVER("fuse_loop_mt_32", "fuse_loop_mt@FUSE_3.2")
+int fuse_loop_mt_32(struct fuse *f, struct fuse_loop_config_v1 *config_v1)
+{
+	struct fuse_loop_config *config = fuse_loop_cfg_create();
+	if (config == NULL)
+		return ENOMEM;
+
+	fuse_loop_cfg_convert(config, config_v1);
+
+	int res = fuse_loop_mt_312(f, config);
+
+	fuse_loop_cfg_destroy(config);
+
 	return res;
 }
 
@@ -4593,10 +4613,19 @@ int fuse_loop_mt_31(struct fuse *f, int clone_fd);
 FUSE_SYMVER("fuse_loop_mt_31", "fuse_loop_mt@FUSE_3.0")
 int fuse_loop_mt_31(struct fuse *f, int clone_fd)
 {
-	struct fuse_loop_config config;
-	config.clone_fd = clone_fd;
-	config.max_idle_threads = 10;
-	return fuse_loop_mt_32(f, &config);
+	int err;
+	struct fuse_loop_config *config = fuse_loop_cfg_create();
+
+	if (config == NULL)
+		return ENOMEM;
+
+	fuse_loop_cfg_set_clone_fd(config, clone_fd);
+
+	err = fuse_loop_mt_312(f, config);
+
+	fuse_loop_cfg_destroy(config);
+
+	return err;
 }
 
 void fuse_exit(struct fuse *f)
@@ -4653,6 +4682,7 @@ static const struct fuse_opt fuse_lib_opts[] = {
 	FUSE_LIB_OPT("kernel_cache",	      kernel_cache, 1),
 	FUSE_LIB_OPT("auto_cache",	      auto_cache, 1),
 	FUSE_LIB_OPT("noauto_cache",	      auto_cache, 0),
+	FUSE_LIB_OPT("no_rofd_flush",	      no_rofd_flush, 1),
 	FUSE_LIB_OPT("umask=",		      set_mode, 1),
 	FUSE_LIB_OPT("umask=%o",	      umask, 0),
 	FUSE_LIB_OPT("uid=",		      set_uid, 1),
@@ -4705,6 +4735,7 @@ void fuse_lib_help(struct fuse_args *args)
 	printf(
 "    -o kernel_cache        cache files in kernel\n"
 "    -o [no]auto_cache      enable caching based on modification times (off)\n"
+"    -o no_rofd_flush       disable flushing of read-only fd on close (off)\n"
 "    -o umask=M             set file permissions (octal)\n"
 "    -o uid=N               set file owner\n"
 "    -o gid=N               set file group\n"
@@ -4803,7 +4834,6 @@ static int fuse_push_module(struct fuse *f, const char *module,
 		fuse_put_module(m);
 		return -1;
 	}
-	newfs->m = m;
 	f->fs = newfs;
 	return 0;
 }
@@ -5014,8 +5044,6 @@ out_free_name_table:
 out_free_session:
 	fuse_session_destroy(f->se);
 out_free_fs:
-	if (f->fs->m)
-		fuse_put_module(f->fs->m);
 	free(f->fs);
 	free(f->conf.modules);
 out_delete_context_key:

@@ -1,8 +1,38 @@
+libfuse 3.12.0 (2022-09-08)
+===========================
+
+* There is a new build parameter to specify where the SysV init script should be
+  installed.
+  
+* The *max_idle_threads* parameter has been deprecated in favor of the new max_threads*
+  parameter (which avoids the excessive overhead of creating and destructing threads).
+  Using max_threads == 1 and calling fuse_session_loop_mt() will run single threaded
+  similar to fuse_session_loop().
+
+The following changes apply when using the most recent API (-DFUSE_USE_VERSION=312,
+see `example/passthrough_hp.cc` for an example for how to usse the new API):
+
+* `struct fuse_loop_config` is now private and has to be constructed using
+  *fuse_loop_cfg_create()* and detroyed with *fuse_loop_cfg_destroy()*.  Parameters can be
+  changed using `fuse_loop_cfg_set_*()` functions.
+
+* *fuse_session_loop_mt()* now accepts `struct fuse_loop_config *` as NULL pointer.
+
+* *fuse_parse_cmdline()* now accepts a *max_threads* option.
+
+
+libfuse 3.11.0 (2022-05-02)
+===========================
+
+* Add support for flag FOPEN_NOFLUSH for avoiding flush on close.
+* Fixed returning an error condition to ioctl(2)
+
+
 libfuse 3.10.5 (2021-09-06)
 ===========================
 
 * Various improvements to make unit tests more robust.
-  
+
 
 libfuse 3.10.4 (2021-06-09)
 ===========================
@@ -422,7 +452,7 @@ libfuse 3.0.0 (2016-12-08)
 
 * The ``-o nopath`` option has been dropped - it never actually did
   anything (since it is unconditionally overwritten with the value of
-  the `nopath` flag in `struct fuse_operations).
+  the `nopath` flag in `struct fuse_operations`).
 
 * The ``-o large_read`` mount option has been dropped. Hopefully no
   one uses a Linux 2.4 kernel anymore.
@@ -446,7 +476,7 @@ libfuse 3.0.0 (2016-12-08)
 
 * The `fuse_session_new` function no longer accepts the ``-o
   clone_fd`` option. Instead, this has become a parameter of the
-  `fuse_session_loop_mt` and ``fuse_loop_mt` functions.
+  `fuse_session_loop_mt` and `fuse_loop_mt` functions.
 
 * For low-level file systems that implement the `write_buf` handler,
   the `splice_read` option is now enabled by default. As usual, this
@@ -636,7 +666,7 @@ libfuse 3.0.0 (2016-12-08)
 * The *fuse_off_t* and *fuse_ino_t* changed from *unsigned long* to
   *uint64_t*, i.e. they are now 64 bits also on 32-bit systems.
 
-* The type of the *generation* member of `struct fuse_entry_param*
+* The type of the *generation* member of `struct fuse_entry_param*`
   changed from *unsigned* to *uint64_t*.
 
 * The (low-level) `setattr` handler gained a *FUSE_SET_ATTR_CTIME* bit
